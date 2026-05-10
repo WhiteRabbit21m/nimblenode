@@ -10,7 +10,7 @@ Register a domain name and point the DNS A record to the VPS's public IP. Don't 
 git clone https://github.com/massmux/nimblenode
 ```
 
-- edit docker-compose.yml setting: 1) the UI password (at least 8 chars long), 2) your node's ALIAS, 3) your fully qualified hostname
+- edit .env file setting: 1) the UI password (at least 8 chars long), 2) your node's ALIAS, 3) your fully qualified hostname
 - pull the image from dockerhub
 
 ```
