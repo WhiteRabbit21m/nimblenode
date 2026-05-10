@@ -7,5 +7,4 @@ lit.key
 .pool
 .tapd 
 mainnet
-docker-compose.yml
 .env
