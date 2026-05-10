@@ -8,3 +8,4 @@ lit.key
 .tapd 
 mainnet
 docker-compose.yml
+.env
