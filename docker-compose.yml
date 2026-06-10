@@ -7,6 +7,7 @@ services:
         image: massmux/lit:latest
         restart: on-failure
         volumes:
+          - ${PWD}/.env:/app/.env:ro
           - ${PWD}/.lit:/root/.lit
           - ${PWD}/.lnd:/root/.lnd
           - ${PWD}/.faraday:/root/.faraday
@@ -22,7 +23,7 @@ services:
           - 9735:9735
           - 80:80
         networks:
-                - lan
+          - lan
 
     bos:
         image: alexbosworth/balanceofsatoshis

@@ -10,19 +10,27 @@ error() {
     exit 0
 }
 
+# load variables from .env if present (allows running without docker-compose)
+if [ -f /app/.env ]; then
+    set -o allexport
+    source /app/.env
+    set +o allexport
+fi
+
 # setting timezone
 echo "export TZ=\"/usr/share/zoneinfo/Europe/Zurich\"" >>  ~/.bashrc
 
 
 cd /root/.lit
 
-echo "httpslisten=0.0.0.0:8443
-uipassword=$CHOSENPASSWORD
+cat > lit.conf << EOF
+httpslisten=0.0.0.0:8443
+uipassword=${CHOSENPASSWORD}
 lnd.rpclisten=0.0.0.0:10009
 lnd.listen=0.0.0.0:9735
 lnd.tlsextraip=0.0.0.0
 lnd.tlsdisableautofill=1
-lnd.tlsextradomain=$SETHOST
+lnd.tlsextradomain=${SETHOST}
 lnd.tlsextradomain=lit
 lnd.tlsautorefresh=true
 lnd-mode=integrated
@@ -32,11 +40,11 @@ lnd.bitcoin.node=neutrino
 lnd.feeurl=https://nodes.lightning.computer/fees/v1/btc-fee-estimates.json
 lnd.protocol.option-scid-alias=true
 lnd.protocol.zero-conf=true
-lnd.alias=$SETALIAS
-lnd.externalip=$SETHOST
+lnd.alias=${SETALIAS}
+lnd.externalip=${SETHOST}
 letsencrypt=true
-letsencrypthost=$SETHOST
-" > lit.conf
+letsencrypthost=${SETHOST}
+EOF
 
 cd /app
 # run the software
