@@ -1,6 +1,6 @@
 FROM debian:12.6-slim
 
-ARG version="v0.16.0-alpha"
+ARG version="v0.16.1-alpha"
 
 
 RUN     apt-get update && \

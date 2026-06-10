@@ -44,6 +44,7 @@ lnd.alias=${SETALIAS}
 lnd.externalip=${SETHOST}
 letsencrypt=true
 letsencrypthost=${SETHOST}
+letsencryptlisten=0.0.0.0:80
 EOF
 
 cd /app
