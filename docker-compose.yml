@@ -6,6 +6,7 @@ services:
         restart: on-failure
         volumes:
           - ${PWD}/.env:/app/.env:ro
+          - ${PWD}/entrypoint.sh:/app/entrypoint.sh:ro
           - ${PWD}/.lit:/root/.lit
           - ${PWD}/.lnd:/root/.lnd
           - ${PWD}/.faraday:/root/.faraday
