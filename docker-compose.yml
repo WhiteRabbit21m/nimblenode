@@ -1,5 +1,3 @@
-version: "3"
-
 services:
     lit:
         container_name: lit
@@ -17,23 +15,96 @@ services:
         entrypoint: /app/entrypoint.sh
         env_file:
           - .env
+        # UI (8443) and Let's Encrypt (80/443) are fronted by nginx-proxy;
+        # only the p2p and gRPC ports are published directly.
+        # SETHOST -> LiT web UI (8443); LND_HOST -> LND REST API (8080).
+        environment:
+          LETSENCRYPT_HOST: "${SETHOST},${LND_HOST}"
+          VIRTUAL_HOST_MULTIPORTS: |-
+            ${SETHOST}:
+              "/":
+                port: 8443
+                proto: https
+            ${LND_HOST}:
+              "/":
+                port: 8080
+                proto: https
         ports:
-          - 8443:8443
           - 10009:10009
           - 9735:9735
+        networks:
+          - lan
+
+    thunderhub:
+        image: apotdevin/thunderhub:latest
+        container_name: thunderhub
+        hostname: thunderhub
+        restart: on-failure
+        depends_on:
+          - lit
+        environment:
+          - NO_VERSION_CHECK=true
+          - ACCOUNT_CONFIG_PATH=/config/thubConfig.yaml
+          - VIRTUAL_HOST=${THUB_HOST}
+          - VIRTUAL_PORT=3000
+          - LETSENCRYPT_HOST=${THUB_HOST}
+        volumes:
+          - ${PWD}/.lnd:/root/.lnd:ro
+          - ${PWD}/thubConfig.yaml:/config/thubConfig.yaml:ro
+        networks:
+          - lan
+
+    nginx-proxy:
+        image: nginxproxy/nginx-proxy:latest
+        container_name: nginx-proxy
+        hostname: nginx-proxy
+        restart: on-failure
+        labels:
+          - "com.github.nginx-proxy.nginx-proxy=true"
+        ports:
           - 80:80
+          - 443:443
+        volumes:
+          - ${PWD}/.nginx/certs:/etc/nginx/certs
+          - ${PWD}/.nginx/vhost:/etc/nginx/vhost.d
+          - ${PWD}/.nginx/html:/usr/share/nginx/html
+          - ${PWD}/.nginx/conf:/etc/nginx/conf.d
+          - /var/run/docker.sock:/tmp/docker.sock:ro
+        networks:
+          - lan
+
+    acme-companion:
+        image: nginxproxy/acme-companion:latest
+        container_name: acme-companion
+        hostname: acme-companion
+        restart: on-failure
+        depends_on:
+          - nginx-proxy
+        environment:
+          - DEFAULT_EMAIL=${LETSENCRYPT_EMAIL}
+        volumes:
+          - ${PWD}/.nginx/certs:/etc/nginx/certs
+          - ${PWD}/.nginx/vhost:/etc/nginx/vhost.d
+          - ${PWD}/.nginx/html:/usr/share/nginx/html
+          - ${PWD}/.nginx/acme:/etc/acme.sh
+          - /var/run/docker.sock:/var/run/docker.sock:ro
         networks:
           - lan
 
     bos:
         image: alexbosworth/balanceofsatoshis
         hostname: bos
+        container_name: bos
+        restart: unless-stopped
+        depends_on:
+          - lit
         volumes:
           - ${PWD}/.lnd:/home/node/.lnd
           - ${PWD}/.bos:/home/node/.bos
-        container_name: bos
-        entrypoint: ""
-        command: ["sleep", "infinity"]
+          - ${PWD}/bos-entrypoint.sh:/app/bos-entrypoint.sh:ro
+        # The wrapper decides whether to idle or run the Telegram bot,
+        # based on the files created by scripts/initbostelegram.
+        entrypoint: ["bash", "/app/bos-entrypoint.sh"]
         networks:
           - lan
 

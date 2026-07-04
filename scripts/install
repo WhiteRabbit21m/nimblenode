@@ -1,0 +1,186 @@
+#!/bin/bash
+
+###############################################################################
+# Nimble Node - Guided Installer (orchestrator)
+#
+# Walks through the whole setup in order:
+# 1. Checks prerequisites (root, Docker, Docker Compose)
+# 2. Prepares the .env file
+# 3. Starts the core services (LiT, reverse proxy, BOS)
+# 4. Creates the LND wallet (interactive) if needed
+# 5. Optionally configures BOS, ThunderHub and the BOS Telegram bot
+#
+# Each optional step simply calls the dedicated script, so you can also run
+# them individually later.
+###############################################################################
+
+set -e  # Exit immediately if a command exits with a non-zero status
+
+# Load shared helpers (color output, ownership resolution)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
+# Always operate from the project root so relative paths (.env, .lnd, ...) work
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_DIR"
+
+# Ask a yes/no question; returns success on yes
+confirm() {
+    local reply
+    read -rp "$1 [y/N]: " reply
+    [[ "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}                 NIMBLE NODE INSTALLER                  ${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+###############################################################################
+# Step 1: Prerequisites
+###############################################################################
+print_step "Checking prerequisites..."
+
+if [ "$EUID" -ne 0 ]; then
+    print_error "This script must be run as root"
+    print_info "Please run: sudo $0"
+    exit 1
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+    print_error "Docker is not installed"
+    exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+    print_error "The Docker daemon is not running"
+    print_info "Start it with: systemctl start docker"
+    exit 1
+fi
+
+if ! docker compose version >/dev/null 2>&1; then
+    print_error "The Docker Compose plugin is not available"
+    exit 1
+fi
+
+print_success "Prerequisites OK"
+echo ""
+
+###############################################################################
+# Step 2: .env file
+###############################################################################
+print_step "Preparing the .env file..."
+
+if [ ! -f .env ]; then
+    cp .env.example .env
+    chown "$(target_owner)" .env 2>/dev/null || true
+    print_warning ".env created from the template."
+    echo ""
+    print_info "Edit .env and set your values:"
+    echo "  - CHOSENPASSWORD   (UI password, min 8 chars)"
+    echo "  - SETALIAS         (node alias)"
+    echo "  - SETHOST          (main FQDN, e.g. node.example.com)"
+    echo "  - THUB_HOST        (e.g. thunderhub.example.com)"
+    echo "  - LND_HOST         (e.g. lnd.example.com)"
+    echo "  - LETSENCRYPT_EMAIL"
+    echo ""
+    print_info "Also create the matching DNS A records, then run this script again."
+    exit 0
+fi
+
+if grep -qE '^(CHOSENPASSWORD=changeme|SETALIAS=yournodealias|SETHOST=yournodeFQDM)$' .env; then
+    print_error "Your .env still contains placeholder values."
+    print_info "Edit .env with your real values, then re-run: sudo $0"
+    exit 1
+fi
+
+print_success ".env looks configured"
+echo ""
+
+###############################################################################
+# Step 3: Start core services
+###############################################################################
+print_step "Starting core services (lit, reverse proxy)..."
+
+# lit and the reverse proxy are always needed; BOS is optional.
+CORE_SERVICES=(lit nginx-proxy acme-companion)
+
+if confirm "Also run the Balance of Satoshis (BOS) container?"; then
+    CORE_SERVICES+=(bos)
+fi
+
+if docker compose up -d "${CORE_SERVICES[@]}"; then
+    print_success "Core services started"
+else
+    print_error "Failed to start the core services"
+    print_info "Check the output above and try: docker compose up -d"
+    exit 1
+fi
+echo ""
+
+###############################################################################
+# Step 4: Wallet
+###############################################################################
+print_step "LND wallet..."
+
+MACAROON_FILE=".lnd/data/chain/bitcoin/mainnet/admin.macaroon"
+
+if [ -f "$MACAROON_FILE" ]; then
+    print_success "Wallet already exists"
+    print_info "If it is locked after a restart, unlock it with: sudo ./scripts/unlock"
+else
+    print_warning "No wallet found yet."
+    if confirm "Create the LND wallet now (interactive)?"; then
+        echo ""
+        "$SCRIPT_DIR/create"
+    else
+        print_info "Skipped. Create it later with: sudo ./scripts/create"
+    fi
+fi
+echo ""
+
+###############################################################################
+# Step 5: Optional components
+###############################################################################
+if [ -f "$MACAROON_FILE" ]; then
+    print_step "Optional components"
+    echo ""
+
+    if confirm "Configure Balance of Satoshis (BOS) now?"; then
+        echo ""
+        "$SCRIPT_DIR/initbos" || print_warning "initbos did not complete (you can run it later)"
+        echo ""
+    fi
+
+    if confirm "Set up ThunderHub now?"; then
+        echo ""
+        "$SCRIPT_DIR/initthub" || print_warning "initthub did not complete (you can run it later)"
+        echo ""
+    fi
+
+    if confirm "Connect BOS to a Telegram bot now?"; then
+        echo ""
+        "$SCRIPT_DIR/initbostelegram" || print_warning "initbostelegram did not complete (you can run it later)"
+        echo ""
+    fi
+else
+    print_info "Optional components (BOS, ThunderHub, Telegram) can be configured"
+    print_info "after the wallet exists. Re-run this script or use the scripts directly."
+    echo ""
+fi
+
+###############################################################################
+# Completion message
+###############################################################################
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}                 INSTALLATION DONE!                     ${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+print_info "Your services (once certificates are issued and the chain has synced):"
+echo "  - LiT web UI:   https://<SETHOST>"
+echo "  - ThunderHub:   https://<THUB_HOST>"
+echo "  - LND REST API: https://<LND_HOST>"
+echo ""
+print_info "Generate least-privilege macaroons for apps with: sudo ./scripts/mkmacaroon"
+print_info "Follow certificate issuance with: docker logs -f acme-companion"
+echo ""

@@ -1,0 +1,148 @@
+#!/bin/bash
+
+###############################################################################
+# Nimble Node - BOS Telegram Bot Setup (guided)
+#
+# This script connects the Balance of Satoshis (BOS) node monitor to a Telegram
+# bot and makes it run persistently:
+# 1. Saves your BotFather API token
+# 2. Starts the bot so you can send /connect and receive a connection code
+# 3. Saves the connection code and relaunches the bot in connected mode
+#
+# Prerequisites:
+# - BOS must be initialized (run ./scripts/initbos first)
+# - A Telegram bot created via @BotFather (you need its HTTP API token)
+###############################################################################
+
+set -e  # Exit immediately if a command exits with a non-zero status
+
+# Load shared helpers (color output, ownership resolution)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
+###############################################################################
+# Step 1: Verify root privileges
+###############################################################################
+print_step "Checking root privileges..."
+
+if [ "$EUID" -ne 0 ]; then
+    print_error "This script must be run as root"
+    print_info "Please run: sudo $0"
+    exit 1
+fi
+
+print_success "Root privileges verified"
+echo ""
+
+###############################################################################
+# Step 2: Check prerequisites
+###############################################################################
+print_step "Checking prerequisites..."
+
+BOS_DIR="./.bos"
+
+if [ ! -d "$BOS_DIR" ]; then
+    print_error "BOS is not initialized yet ($BOS_DIR is missing)"
+    print_info "Please run ./scripts/initbos first"
+    exit 1
+fi
+
+if ! ls "$BOS_DIR"/*/credentials.json >/dev/null 2>&1; then
+    print_warning "No saved node credentials found under $BOS_DIR/*/"
+    print_info "If the bot cannot read your node, run ./scripts/initbos again"
+fi
+
+print_success "Prerequisites OK"
+echo ""
+
+###############################################################################
+# Step 3: Ask for the Telegram bot token
+###############################################################################
+print_step "Telegram bot token"
+echo ""
+echo "On Telegram, talk to @BotFather, run /newbot and copy the HTTP API token."
+echo ""
+
+read -rsp "Paste the BotFather API token: " TG_TOKEN
+echo ""
+
+if [ -z "$TG_TOKEN" ]; then
+    print_error "No token provided"
+    exit 1
+fi
+
+KEY_FILE="$BOS_DIR/telegram_bot_api_key"
+printf '%s' "$TG_TOKEN" > "$KEY_FILE"
+chmod 600 "$KEY_FILE"
+chown "$(target_owner)" "$KEY_FILE" 2>/dev/null || print_warning "Could not change ownership of $KEY_FILE"
+
+print_success "Token saved to $KEY_FILE"
+echo ""
+
+###############################################################################
+# Step 4: Start the bot so it can receive /connect
+###############################################################################
+print_step "Starting the bot to await /connect..."
+
+docker compose up -d bos >/dev/null 2>&1 || {
+    print_error "Failed to create the bos container"
+    print_info "Try: docker compose up -d"
+    exit 1
+}
+
+# Recreate the process so the wrapper picks up the freshly saved token
+docker restart bos >/dev/null 2>&1 || true
+
+print_success "Bot started"
+echo ""
+print_info "Now open Telegram, open a chat with your bot and send:"
+echo "     /connect"
+print_info "The bot will reply with a CONNECTION CODE."
+echo ""
+print_info "(If the bot does not respond, check the token with: docker logs bos)"
+echo ""
+
+###############################################################################
+# Step 5: Capture the connection code
+###############################################################################
+read -rp "Paste the connection code the bot gave you: " TG_CODE
+
+if [ -z "$TG_CODE" ]; then
+    print_error "No connection code provided"
+    exit 1
+fi
+
+CODE_FILE="$BOS_DIR/telegram_connect_code"
+printf '%s' "$TG_CODE" > "$CODE_FILE"
+chmod 600 "$CODE_FILE"
+chown "$(target_owner)" "$CODE_FILE" 2>/dev/null || print_warning "Could not change ownership of $CODE_FILE"
+
+print_success "Connection code saved"
+echo ""
+
+###############################################################################
+# Step 6: Relaunch the bot in persistent connected mode
+###############################################################################
+print_step "Restarting the bot in connected mode..."
+
+if docker restart bos >/dev/null 2>&1; then
+    print_success "Bot running in connected mode"
+else
+    print_error "Failed to restart the bos container"
+    exit 1
+fi
+echo ""
+
+###############################################################################
+# Completion message
+###############################################################################
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}       BOS TELEGRAM BOT CONNECTED SUCCESSFULLY!          ${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+print_info "The bot is now persistent: it auto-reconnects after container or VPS restarts."
+print_info "Check its status/logs with:"
+echo "     docker logs -f bos"
+echo ""
+print_info "On Telegram, send /help to your bot to see the available commands."
+echo ""

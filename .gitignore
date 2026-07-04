@@ -5,6 +5,9 @@ lit.key
 .faraday
 .loop
 .pool
-.tapd 
+.tapd
+.bos
+.nginx
 mainnet
 .env
+thubConfig.yaml

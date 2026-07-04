@@ -4,10 +4,11 @@
 set -e
 
 # error function is used within a bash function in order to send the error
-# message directly to the stderr output and exit.
+# message directly to the stderr output and exit with a failure status so
+# Docker's restart policy can react to it.
 error() {
     echo "$1" > /dev/stderr
-    exit 0
+    exit 1
 }
 
 # load variables from .env if present (allows running without docker-compose)
@@ -17,8 +18,8 @@ if [ -f /app/.env ]; then
     set +o allexport
 fi
 
-# setting timezone
-echo "export TZ=\"/usr/share/zoneinfo/Europe/Zurich\"" >>  ~/.bashrc
+# setting timezone for the running process (inherited by litd below)
+export TZ="Europe/Zurich"
 
 
 cd /root/.lit
@@ -27,6 +28,7 @@ cat > lit.conf << EOF
 httpslisten=0.0.0.0:8443
 uipassword=${CHOSENPASSWORD}
 lnd.rpclisten=0.0.0.0:10009
+lnd.restlisten=0.0.0.0:8080
 lnd.listen=0.0.0.0:9735
 lnd.tlsextraip=0.0.0.0
 lnd.tlsdisableautofill=1
@@ -42,10 +44,12 @@ lnd.protocol.option-scid-alias=true
 lnd.protocol.zero-conf=true
 lnd.alias=${SETALIAS}
 lnd.externalip=${SETHOST}
-letsencrypt=true
-letsencrypthost=${SETHOST}
-letsencryptlisten=0.0.0.0:80
 EOF
+
+# add the LND REST subdomain to the TLS cert only when configured
+if [ -n "${LND_HOST}" ]; then
+    echo "lnd.tlsextradomain=${LND_HOST}" >> lit.conf
+fi
 
 cd /app
 # run the software
