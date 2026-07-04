@@ -2,9 +2,9 @@
 
 ###############################################################################
 # Nimble Node - Balance of Satoshis (BOS) Initialization Script
-# 
+#
 # This script initializes Balance of Satoshis by:
-# 1. Extracting the node alias from docker-compose.yml
+# 1. Extracting the node alias from .env
 # 2. Creating the BOS configuration directory
 # 3. Generating credentials.json with TLS certificate and macaroon
 #
@@ -59,20 +59,20 @@ print_success "Root privileges verified"
 echo ""
 
 ###############################################################################
-# Step 2: Check if docker-compose.yml exists
+# Step 2: Check if .env exists
 ###############################################################################
-print_step "Checking for docker-compose.yml..."
+print_step "Checking for .env..."
 
-COMPOSE_FILE="./docker-compose.yml"
+ENV_FILE="./.env"
 
-if [ ! -f "$COMPOSE_FILE" ]; then
-    print_error "File not found: $COMPOSE_FILE"
+if [ ! -f "$ENV_FILE" ]; then
+    print_error "File not found: $ENV_FILE"
     print_info "Please ensure you are in the nimblenode directory"
     print_info "Current directory: $(pwd)"
     exit 1
 fi
 
-print_success "Found docker-compose.yml"
+print_success "Found .env"
 echo ""
 
 ###############################################################################
@@ -110,18 +110,18 @@ print_success "Found TLS certificate"
 echo ""
 
 ###############################################################################
-# Step 5: Extract node alias from docker-compose.yml
+# Step 5: Extract node alias from .env
 ###############################################################################
-print_step "Extracting node alias from docker-compose.yml..."
+print_step "Extracting node alias from .env..."
 
-# Extract SETALIAS value from docker-compose.yml
-SETALIAS=$(grep "SETALIAS:" "$COMPOSE_FILE" | sed 's/.*SETALIAS: *//' | tr -d ' ' | tr -d '"' | tr -d "'")
+# Extract SETALIAS value from .env
+SETALIAS=$(grep "^SETALIAS=" "$ENV_FILE" | sed 's/^SETALIAS=//' | tr -d ' ' | tr -d '"' | tr -d "'")
 
 # Check if a value was found
 if [ -z "$SETALIAS" ]; then
-    print_error "SETALIAS not found in $COMPOSE_FILE"
-    print_info "Please ensure your docker-compose.yml contains a SETALIAS setting"
-    print_info "Example: SETALIAS: YourNodeName"
+    print_error "SETALIAS not found in $ENV_FILE"
+    print_info "Please ensure your .env contains a SETALIAS setting"
+    print_info "Example: SETALIAS=YourNodeName"
     exit 1
 fi
 

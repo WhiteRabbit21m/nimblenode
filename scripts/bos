@@ -1,0 +1,17 @@
+#!/bin/bash
+
+ENV_FILE="./.env"
+
+if [ ! -f "$ENV_FILE" ]; then
+    echo "File not found: $ENV_FILE (esegui questo script dalla directory nimblenode)"
+    exit 1
+fi
+
+SETALIAS=$(grep "^SETALIAS=" "$ENV_FILE" | sed 's/^SETALIAS=//' | tr -d ' ' | tr -d '"' | tr -d "'")
+
+if [ -z "$SETALIAS" ]; then
+    echo "SETALIAS not found in $ENV_FILE"
+    exit 1
+fi
+
+docker exec -ti -w /app bos ./bos "$@" --node "$SETALIAS"

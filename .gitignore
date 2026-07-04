@@ -8,3 +8,6 @@ lit.key
 .tapd 
 mainnet
 .env
+CREDENTIALS.txt
+.bos/SatsRouting/credentials.json
+scripts/*.bak

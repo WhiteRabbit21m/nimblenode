@@ -53,10 +53,21 @@ Balance of Satoshis (BOS) is preinstalled. To get this tool automatically config
 ./scripts/initbos
 ```
 
-then you can use the tool by entering the container:
+`initbos` reads the node alias from `SETALIAS` in `.env` and generates `.bos/<alias>/credentials.json`.
+
+Then run BOS commands with the wrapper script, which automatically targets your node (`SETALIAS` in `.env`):
 
 ```
-docker exec -ti bos bash
+./scripts/bos balance
+./scripts/bos peers
+./scripts/bos --help
+```
+
+Alternatively, enter the container directly (the `bos` executable lives in `/app`, and every command needs `--node <your-alias>`):
+
+```
+docker exec -ti -w /app bos bash
+./bos balance --node <your-alias>
 ```
 
 ## Maintenance
