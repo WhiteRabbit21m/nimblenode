@@ -141,6 +141,19 @@ docker exec -ti lit bash
 
 then you can access the lncli command as usual to manage your node from the command line.
 
+## Refresh credentials (TLS certificate changed)
+
+BOS and ThunderHub connect to LND using a copy of the node's TLS certificate embedded in their configuration (`.bos/<node>/credentials.json` and `thubConfig.yaml`). If LND ever regenerates `tls.cert` (for example after the node's IP or hostnames change, or on TLS auto-refresh), those embedded copies become stale and the apps stop connecting. Typical symptoms:
+
+- BOS logs show `14 UNAVAILABLE ... self-signed certificate`
+- ThunderHub shows accounts as missing credentials / cannot connect
+
+Re-sync the embedded credentials with the current certificate (this preserves all your passwords and only restarts the affected containers, and does nothing if everything already matches):
+
+```
+sudo ./scripts/refreshcreds
+```
+
 ## Reset the node
 
 This will completely whipeout your node and all lightning data (so be sure to have a backup or to have emptied all your funds). This is nice to redo the stuff from the beginning or to create a fresh node.

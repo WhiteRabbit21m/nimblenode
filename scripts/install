@@ -163,6 +163,13 @@ if [ -f "$MACAROON_FILE" ]; then
         "$SCRIPT_DIR/initbostelegram" || print_warning "initbostelegram did not complete (you can run it later)"
         echo ""
     fi
+
+    # Make sure BOS/ThunderHub embed the certificate the node actually ended up
+    # using. This guards against a TLS regeneration happening between startup
+    # and the moment the credentials were generated. It is idempotent and only
+    # restarts containers if something actually changed.
+    "$SCRIPT_DIR/refreshcreds" || print_warning "refreshcreds did not complete (you can run it later)"
+    echo ""
 else
     print_info "Optional components (BOS, ThunderHub, Telegram) can be configured"
     print_info "after the wallet exists. Re-run this script or use the scripts directly."
@@ -190,4 +197,5 @@ echo "  - LND REST API: https://${LND_HOST:-<LND_HOST>}"
 echo ""
 print_info "Generate least-privilege macaroons for apps with: sudo ./scripts/mkmacaroon"
 print_info "Follow certificate issuance with: docker logs -f acme-companion"
+print_info "If BOS/ThunderHub stop connecting after a restart, run: sudo ./scripts/refreshcreds"
 echo ""
