@@ -3,7 +3,7 @@ services:
         container_name: lit
         hostname: lit
         image: massmux/lit:latest
-        restart: on-failure
+        restart: unless-stopped
         volumes:
           - ${PWD}/.env:/app/.env:ro
           - ${PWD}/entrypoint.sh:/app/entrypoint.sh:ro
@@ -40,7 +40,7 @@ services:
         image: apotdevin/thunderhub:latest
         container_name: thunderhub
         hostname: thunderhub
-        restart: on-failure
+        restart: unless-stopped
         depends_on:
           - lit
         environment:
@@ -50,7 +50,8 @@ services:
           - VIRTUAL_PORT=3000
           - LETSENCRYPT_HOST=${THUB_HOST}
         volumes:
-          - ${PWD}/.lnd:/root/.lnd:ro
+          # Credentials are embedded (base64) in thubConfig.yaml by
+          # scripts/initthub, so ThunderHub does not need access to .lnd.
           - ${PWD}/thubConfig.yaml:/config/thubConfig.yaml:ro
         networks:
           - lan
@@ -59,7 +60,7 @@ services:
         image: nginxproxy/nginx-proxy:latest
         container_name: nginx-proxy
         hostname: nginx-proxy
-        restart: on-failure
+        restart: unless-stopped
         labels:
           - "com.github.nginx-proxy.nginx-proxy=true"
         ports:
@@ -78,7 +79,7 @@ services:
         image: nginxproxy/acme-companion:latest
         container_name: acme-companion
         hostname: acme-companion
-        restart: on-failure
+        restart: unless-stopped
         depends_on:
           - nginx-proxy
         environment:
