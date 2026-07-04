@@ -82,6 +82,7 @@ services:
           - nginx-proxy
         environment:
           - DEFAULT_EMAIL=${LETSENCRYPT_EMAIL}
+          - NGINX_PROXY_CONTAINER=nginx-proxy
         volumes:
           - ${PWD}/.nginx/certs:/etc/nginx/certs
           - ${PWD}/.nginx/vhost:/etc/nginx/vhost.d

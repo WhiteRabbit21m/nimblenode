@@ -176,10 +176,17 @@ echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━
 echo -e "${GREEN}                 INSTALLATION DONE!                     ${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
+
+# Load the configured values so the summary shows the real URLs
+set -a
+# shellcheck disable=SC1091
+. ./.env
+set +a
+
 print_info "Your services (once certificates are issued and the chain has synced):"
-echo "  - LiT web UI:   https://<SETHOST>"
-echo "  - ThunderHub:   https://<THUB_HOST>"
-echo "  - LND REST API: https://<LND_HOST>"
+echo "  - LiT web UI:   https://${SETHOST:-<SETHOST>}"
+echo "  - ThunderHub:   https://${THUB_HOST:-<THUB_HOST>}"
+echo "  - LND REST API: https://${LND_HOST:-<LND_HOST>}"
 echo ""
 print_info "Generate least-privilege macaroons for apps with: sudo ./scripts/mkmacaroon"
 print_info "Follow certificate issuance with: docker logs -f acme-companion"

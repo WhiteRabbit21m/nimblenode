@@ -92,15 +92,14 @@ print_step "Extracting node alias from .env..."
 # Extract SETALIAS value from .env (format: SETALIAS=YourNodeName)
 SETALIAS=$(grep '^SETALIAS=' "$ENV_FILE" | head -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
 
-# Check if a value was found
+# The alias is only used here as a folder name for the BOS credentials, so it
+# is not mandatory: fall back to a sane default when it is empty or missing.
 if [ -z "$SETALIAS" ]; then
-    print_error "SETALIAS not found in $ENV_FILE"
-    print_info "Please ensure your .env contains a SETALIAS setting"
-    print_info "Example: SETALIAS=YourNodeName"
-    exit 1
+    SETALIAS="NimbleNode"
+    print_warning "SETALIAS not set in $ENV_FILE, using default account name: $SETALIAS"
+else
+    print_success "Node alias found: $SETALIAS"
 fi
-
-print_success "Node alias found: $SETALIAS"
 echo ""
 
 ###############################################################################
