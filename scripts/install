@@ -148,9 +148,13 @@ print_step "Starting core services (lit, reverse proxy)..."
 # lit and the reverse proxy are always needed; BOS is optional.
 CORE_SERVICES=(lit nginx-proxy acme-companion)
 
-# Bring up the Tor sidecar for hybrid / tor-only modes.
+# Bring up the Tor sidecar for hybrid / tor-only modes. Build it first, since
+# the image is local-only (not on any registry) and up would otherwise try to
+# pull it.
 if [ "$TOR_MODE" != "clearnet" ]; then
     CORE_SERVICES+=(tor)
+    print_info "Building the Tor image (first run only)..."
+    docker compose build tor || print_warning "Tor image build failed (will retry on up)"
 fi
 
 if confirm "Also run the Balance of Satoshis (BOS) container?"; then

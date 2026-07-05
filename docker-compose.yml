@@ -122,6 +122,8 @@ services:
           context: .
           dockerfile: Dockerfile.tor
         image: nimblenode/tor:latest
+        # Build locally instead of pulling: this image is not on any registry.
+        pull_policy: build
         container_name: tor
         restart: unless-stopped
         # Only started when the "tor" profile is active. The installer sets
