@@ -11,3 +11,5 @@ lit.key
 mainnet
 .env
 thubConfig.yaml
+CREDENTIALS.txt
+scripts/*.bak
