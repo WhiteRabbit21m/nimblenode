@@ -1,0 +1,16 @@
+#!/bin/bash
+
+ENV_FILE="./.env"
+
+if [ ! -f "$ENV_FILE" ]; then
+    echo "File not found: $ENV_FILE (esegui questo script dalla directory nimblenode)"
+    exit 1
+fi
+
+SETALIAS=$(grep '^SETALIAS=' "$ENV_FILE" | head -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
+
+# Same fallback as scripts/initbos: the alias is only used as the BOS account
+# (folder) name, so when it is empty we target the default "NimbleNode" node.
+[ -z "$SETALIAS" ] && SETALIAS="NimbleNode"
+
+docker exec -ti -w /app bos ./bos "$@" --node "$SETALIAS"
