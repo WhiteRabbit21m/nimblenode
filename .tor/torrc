@@ -1,17 +1,25 @@
 # Tor configuration for Nimble Node.
 #
-# The tor container shares the lit container's network namespace
-# (network_mode: "service:lit"), so LND reaches the SOCKS and control ports on
-# 127.0.0.1 and Tor reaches LND's p2p listener on 127.0.0.1:9735. LND creates
-# and manages its own v3 onion service through the control port.
+# The tor container runs as an independent sidecar on the "lan" bridge network.
+# LND (in the lit container) reaches it by service name over the internal
+# network: SOCKS on tor:9050 and the control port on tor:9051. LND creates and
+# manages its own v3 onion service through the control port and forwards it to
+# LND's p2p listener (see lnd.tor.targetipaddress in entrypoint.sh).
 #
-# Authentication uses the control cookie (the standard method): Tor writes it
-# to DataDirectory, and the lit container reads it via the shared tor-data
-# volume mounted at the same path.
+# The ports bind to 0.0.0.0 so they are reachable from the lit container, but
+# they are NOT published to the host, so they stay on the internal docker
+# network only. Access is restricted to the docker subnet + loopback, and the
+# control port additionally requires the control cookie (the standard method),
+# shared with lit through the tor-data volume.
 
-SocksPort 127.0.0.1:9050
-ControlPort 127.0.0.1:9051
+SocksPort 0.0.0.0:9050
+SocksPolicy accept 172.28.0.0/16
+SocksPolicy accept 127.0.0.0/8
+SocksPolicy reject *
+
+ControlPort 0.0.0.0:9051
 CookieAuthentication 1
 CookieAuthFileGroupReadable 1
+
 DataDirectory /var/lib/tor
 Log notice stdout

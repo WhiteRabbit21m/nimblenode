@@ -47,17 +47,19 @@ EOF
 
 # Network privacy mode. Defaults to clearnet to preserve the previous behaviour
 # when TOR_MODE is unset. The tor container (started via the "tor" compose
-# profile) shares this network namespace, so LND reaches it on 127.0.0.1 and
-# authenticates to the control port with the shared cookie. Only LND's p2p uses
-# Tor here; the web UIs stay on clearnet.
+# profile) runs as a sidecar on the lan network, so LND reaches it at
+# tor:9050 / tor:9051 and authenticates to the control port with the shared
+# cookie. targetipaddress is lit's static IP so Tor forwards the onion to LND's
+# p2p listener. Only LND's p2p uses Tor here; the web UIs stay on clearnet.
 case "${TOR_MODE:-clearnet}" in
     tor)
         # Tor only: never advertise a clearnet address; isolate streams.
         cat >> lit.conf << EOF
 lnd.tor.active=true
 lnd.tor.v3=true
-lnd.tor.socks=127.0.0.1:9050
-lnd.tor.control=127.0.0.1:9051
+lnd.tor.socks=tor:9050
+lnd.tor.control=tor:9051
+lnd.tor.targetipaddress=172.28.0.10
 lnd.tor.streamisolation=true
 EOF
         ;;
@@ -66,8 +68,9 @@ EOF
         cat >> lit.conf << EOF
 lnd.tor.active=true
 lnd.tor.v3=true
-lnd.tor.socks=127.0.0.1:9050
-lnd.tor.control=127.0.0.1:9051
+lnd.tor.socks=tor:9050
+lnd.tor.control=tor:9051
+lnd.tor.targetipaddress=172.28.0.10
 lnd.tor.skip-proxy-for-clearnet-targets=true
 lnd.externalip=${SETHOST}
 EOF

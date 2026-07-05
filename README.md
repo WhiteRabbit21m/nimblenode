@@ -144,7 +144,7 @@ It offers ready-made profiles (read-only, invoice-only) or a custom set of `enti
 
 ## Tor
 
-The node can run LND behind a Tor v3 onion service. A hardened `tor` sidecar is built from the official Tor Project repository (see `Dockerfile.tor`) and shares the `lit` container's network namespace, so LND talks to it over `127.0.0.1` and authenticates to the control port with the standard control cookie. LND creates and manages its own onion address; only LND's peer-to-peer traffic uses Tor (the web UIs stay on clearnet).
+The node can run LND behind a Tor v3 onion service. A hardened `tor` sidecar is built from the official Tor Project repository (see `Dockerfile.tor`) and runs on the internal `lan` network, so LND reaches it at `tor:9050` (SOCKS) and `tor:9051` (control) and authenticates with the standard control cookie (shared through the `tor-data` volume). LND creates and manages its own onion address; only LND's peer-to-peer traffic uses Tor (the web UIs stay on clearnet). The control and SOCKS ports are never published to the host, staying on the internal docker network only.
 
 Choose the mode during `./scripts/install`, or set `TOR_MODE` in `.env`:
 

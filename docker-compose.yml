@@ -37,7 +37,10 @@ services:
           - 10009:10009
           - 9735:9735
         networks:
-          - lan
+          lan:
+            # Static IP so Tor can forward the onion service to LND's p2p
+            # listener (lnd.tor.targetipaddress in entrypoint.sh).
+            ipv4_address: 172.28.0.10
 
     thunderhub:
         image: apotdevin/thunderhub:latest
@@ -124,12 +127,11 @@ services:
         # Only started when the "tor" profile is active. The installer sets
         # COMPOSE_PROFILES=tor in .env for hybrid / tor-only modes.
         profiles: ["tor"]
-        # Share lit's network namespace so LND <-> Tor talk over 127.0.0.1
-        # (socks 9050 / control 9051) and Tor can forward the onion to LND's
-        # p2p listener on 127.0.0.1:9735 without dealing with dynamic IPs.
-        network_mode: "service:lit"
-        depends_on:
-          - lit
+        # Independent sidecar on the lan network: LND reaches it at
+        # tor:9050 (socks) / tor:9051 (control). Kept separate from lit so a
+        # lit restart never tears down Tor's networking.
+        networks:
+          - lan
         # Hardening: Tor needs no extra privileges. Everything writable lives
         # in the tor-data volume and tmpfs, so the rootfs stays read-only.
         read_only: true
@@ -146,6 +148,9 @@ services:
 networks:
   lan:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
 
 volumes:
   # Holds Tor state and the control-auth cookie, shared read-only with lit.
