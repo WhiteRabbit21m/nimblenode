@@ -43,8 +43,40 @@ lnd.feeurl=https://nodes.lightning.computer/fees/v1/btc-fee-estimates.json
 lnd.protocol.option-scid-alias=true
 lnd.protocol.zero-conf=true
 lnd.alias=${SETALIAS}
+EOF
+
+# Network privacy mode. Defaults to clearnet to preserve the previous behaviour
+# when TOR_MODE is unset. The tor container (started via the "tor" compose
+# profile) shares this network namespace, so LND reaches it on 127.0.0.1 and
+# authenticates to the control port with the shared cookie. Only LND's p2p uses
+# Tor here; the web UIs stay on clearnet.
+case "${TOR_MODE:-clearnet}" in
+    tor)
+        # Tor only: never advertise a clearnet address; isolate streams.
+        cat >> lit.conf << EOF
+lnd.tor.active=true
+lnd.tor.v3=true
+lnd.tor.socks=127.0.0.1:9050
+lnd.tor.control=127.0.0.1:9051
+lnd.tor.streamisolation=true
+EOF
+        ;;
+    hybrid)
+        # Reachable via both the clearnet FQDN and an auto-generated v3 onion.
+        cat >> lit.conf << EOF
+lnd.tor.active=true
+lnd.tor.v3=true
+lnd.tor.socks=127.0.0.1:9050
+lnd.tor.control=127.0.0.1:9051
+lnd.tor.skip-proxy-for-clearnet-targets=true
 lnd.externalip=${SETHOST}
 EOF
+        ;;
+    *)
+        # Clearnet only (default): advertise the public FQDN, no Tor.
+        echo "lnd.externalip=${SETHOST}" >> lit.conf
+        ;;
+esac
 
 # add the LND REST subdomain to the TLS cert only when configured
 if [ -n "${LND_HOST}" ]; then

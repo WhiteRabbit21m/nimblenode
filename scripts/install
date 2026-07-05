@@ -31,6 +31,16 @@ confirm() {
     [[ "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]
 }
 
+# Set (or update) a KEY=value pair in the .env file
+set_env_var() {
+    local key="$1" val="$2"
+    if grep -qE "^${key}=" .env; then
+        sed -i "s|^${key}=.*|${key}=${val}|" .env
+    else
+        echo "${key}=${val}" >> .env
+    fi
+}
+
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${BLUE}                 NIMBLE NODE INSTALLER                  ${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -102,12 +112,46 @@ print_success ".env looks configured"
 echo ""
 
 ###############################################################################
-# Step 3: Start core services
+# Step 3: Network privacy mode (Tor)
+###############################################################################
+print_step "Network privacy mode..."
+
+# Only LND's p2p uses Tor; the web UIs stay on clearnet either way.
+echo "  1) Clearnet only  (public IP + domain, no Tor)"
+echo "  2) Hybrid         (clearnet + Tor onion) [recommended]"
+echo "  3) Tor only       (onion only, public IP not advertised)"
+read -rp "Choose [1-3, default 2]: " tor_choice
+
+case "$tor_choice" in
+    1) TOR_MODE=clearnet ;;
+    3) TOR_MODE=tor ;;
+    *) TOR_MODE=hybrid ;;
+esac
+
+set_env_var TOR_MODE "$TOR_MODE"
+# COMPOSE_PROFILES lets a plain "docker compose up -d" start (or skip) the tor
+# container automatically based on the chosen mode.
+if [ "$TOR_MODE" = "clearnet" ]; then
+    set_env_var COMPOSE_PROFILES ""
+else
+    set_env_var COMPOSE_PROFILES "tor"
+fi
+
+print_success "Network mode: $TOR_MODE"
+echo ""
+
+###############################################################################
+# Step 4: Start core services
 ###############################################################################
 print_step "Starting core services (lit, reverse proxy)..."
 
 # lit and the reverse proxy are always needed; BOS is optional.
 CORE_SERVICES=(lit nginx-proxy acme-companion)
+
+# Bring up the Tor sidecar for hybrid / tor-only modes.
+if [ "$TOR_MODE" != "clearnet" ]; then
+    CORE_SERVICES+=(tor)
+fi
 
 if confirm "Also run the Balance of Satoshis (BOS) container?"; then
     CORE_SERVICES+=(bos)
@@ -123,7 +167,7 @@ fi
 echo ""
 
 ###############################################################################
-# Step 4: Wallet
+# Step 5: Wallet
 ###############################################################################
 print_step "LND wallet..."
 
@@ -144,7 +188,7 @@ fi
 echo ""
 
 ###############################################################################
-# Step 5: Optional components
+# Step 6: Optional components
 ###############################################################################
 if [ -f "$MACAROON_FILE" ]; then
     print_step "Optional components"

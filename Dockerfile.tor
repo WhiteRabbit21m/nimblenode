@@ -1,0 +1,24 @@
+FROM debian:12.6-slim
+
+# Install Tor from the official Tor Project repository (signed with the Tor
+# Project GPG key) instead of a third-party image, to keep the supply chain
+# trustworthy for a node that handles funds.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        apt-transport-https ca-certificates gnupg wget; \
+    wget -qO- https://deb.torproject.org/torproject.org/A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89.asc \
+        | gpg --dearmor -o /usr/share/keyrings/tor-archive-keyring.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/tor-archive-keyring.gpg] https://deb.torproject.org/torproject.org bookworm main" \
+        > /etc/apt/sources.list.d/tor.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends tor deb.torproject.org-keyring; \
+    apt-get purge -y --auto-remove wget gnupg apt-transport-https; \
+    rm -rf /var/lib/apt/lists/*
+
+# Run unprivileged: the tor package creates the debian-tor user and owns
+# /var/lib/tor, so no privilege drop (setuid) is needed at runtime and the
+# container can run with all capabilities dropped.
+USER debian-tor
+
+CMD ["tor", "-f", "/etc/tor/torrc"]

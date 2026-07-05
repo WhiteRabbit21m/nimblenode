@@ -142,6 +142,31 @@ To generate a least-privilege macaroon for an app (instead of the all-powerful `
 
 It offers ready-made profiles (read-only, invoice-only) or a custom set of `entity:action` permissions, can restrict the macaroon to a single IP address, and prints it in both hex and base64 for use with the REST endpoint above.
 
+## Tor
+
+The node can run LND behind a Tor v3 onion service. A hardened `tor` sidecar is built from the official Tor Project repository (see `Dockerfile.tor`) and shares the `lit` container's network namespace, so LND talks to it over `127.0.0.1` and authenticates to the control port with the standard control cookie. LND creates and manages its own onion address; only LND's peer-to-peer traffic uses Tor (the web UIs stay on clearnet).
+
+Choose the mode during `./scripts/install`, or set `TOR_MODE` in `.env`:
+
+- `clearnet` (default): public IP + domain only, no Tor. The `tor` container does not start.
+- `hybrid`: reachable via both the clearnet FQDN and an auto-generated `.onion`.
+- `tor`: onion only, the public IP is never advertised (stream isolation on).
+
+The installer keeps `COMPOSE_PROFILES` in sync (empty for clearnet, `tor` otherwise), so a plain `docker compose up -d` starts or skips the Tor container automatically. To switch mode on an existing node, edit `TOR_MODE` and `COMPOSE_PROFILES` in `.env`, then:
+
+```
+docker compose up -d
+docker compose restart lit
+```
+
+Find your node's onion address once LND is running with:
+
+```
+docker exec -ti lit lncli getinfo
+```
+
+Look for the `.onion` entry under `uris`.
+
 ## Maintenance
 
 Just connect to your running container with

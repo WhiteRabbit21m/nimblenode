@@ -13,6 +13,9 @@ services:
           - ${PWD}/.loop:/root/.loop
           - ${PWD}/.pool:/root/.pool
           - ${PWD}/.tapd:/root/.tapd
+          # Read the Tor control cookie written by the tor service (used only
+          # when Tor is enabled; harmless otherwise).
+          - tor-data:/var/lib/tor:ro
         entrypoint: /app/entrypoint.sh
         env_file:
           - .env
@@ -111,6 +114,39 @@ services:
         networks:
           - lan
 
+    tor:
+        build:
+          context: .
+          dockerfile: Dockerfile.tor
+        image: nimblenode/tor:latest
+        container_name: tor
+        restart: unless-stopped
+        # Only started when the "tor" profile is active. The installer sets
+        # COMPOSE_PROFILES=tor in .env for hybrid / tor-only modes.
+        profiles: ["tor"]
+        # Share lit's network namespace so LND <-> Tor talk over 127.0.0.1
+        # (socks 9050 / control 9051) and Tor can forward the onion to LND's
+        # p2p listener on 127.0.0.1:9735 without dealing with dynamic IPs.
+        network_mode: "service:lit"
+        depends_on:
+          - lit
+        # Hardening: Tor needs no extra privileges. Everything writable lives
+        # in the tor-data volume and tmpfs, so the rootfs stays read-only.
+        read_only: true
+        security_opt:
+          - no-new-privileges:true
+        cap_drop:
+          - ALL
+        tmpfs:
+          - /tmp
+        volumes:
+          - ${PWD}/.tor/torrc:/etc/tor/torrc:ro
+          - tor-data:/var/lib/tor
+
 networks:
   lan:
     driver: bridge
+
+volumes:
+  # Holds Tor state and the control-auth cookie, shared read-only with lit.
+  tor-data:
