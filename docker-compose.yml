@@ -1,42 +1,159 @@
-version: "3"
-
 services:
     lit:
         container_name: lit
         hostname: lit
         image: massmux/lit:latest
-        restart: on-failure
+        restart: unless-stopped
         volumes:
           - ${PWD}/.env:/app/.env:ro
+          - ${PWD}/entrypoint.sh:/app/entrypoint.sh:ro
           - ${PWD}/.lit:/root/.lit
           - ${PWD}/.lnd:/root/.lnd
           - ${PWD}/.faraday:/root/.faraday
           - ${PWD}/.loop:/root/.loop
           - ${PWD}/.pool:/root/.pool
           - ${PWD}/.tapd:/root/.tapd
+          # Read the Tor control cookie written by the tor service (used only
+          # when Tor is enabled; harmless otherwise).
+          - tor-data:/var/lib/tor:ro
         entrypoint: /app/entrypoint.sh
         env_file:
           - .env
+        # UI (8443) and Let's Encrypt (80/443) are fronted by nginx-proxy;
+        # only the p2p and gRPC ports are published directly.
+        # SETHOST -> LiT web UI (8443); LND_HOST -> LND REST API (8080).
+        environment:
+          LETSENCRYPT_HOST: "${SETHOST},${LND_HOST}"
+          VIRTUAL_HOST_MULTIPORTS: |-
+            ${SETHOST}:
+              "/":
+                port: 8443
+                proto: https
+            ${LND_HOST}:
+              "/":
+                port: 8080
+                proto: https
         ports:
-          - 8443:8443
           - 10009:10009
           - 9735:9735
+        networks:
+          lan:
+            # Static IP so Tor can forward the onion service to LND's p2p
+            # listener (lnd.tor.targetipaddress in entrypoint.sh).
+            ipv4_address: 172.28.0.10
+
+    thunderhub:
+        image: apotdevin/thunderhub:latest
+        container_name: thunderhub
+        hostname: thunderhub
+        restart: unless-stopped
+        depends_on:
+          - lit
+        environment:
+          - NO_VERSION_CHECK=true
+          - ACCOUNT_CONFIG_PATH=/config/thubConfig.yaml
+          - VIRTUAL_HOST=${THUB_HOST}
+          - VIRTUAL_PORT=3000
+          - LETSENCRYPT_HOST=${THUB_HOST}
+        volumes:
+          # Credentials are embedded (base64) in thubConfig.yaml by
+          # scripts/initthub, so ThunderHub does not need access to .lnd.
+          - ${PWD}/thubConfig.yaml:/config/thubConfig.yaml:ro
+        networks:
+          - lan
+
+    nginx-proxy:
+        image: nginxproxy/nginx-proxy:latest
+        container_name: nginx-proxy
+        hostname: nginx-proxy
+        restart: unless-stopped
+        labels:
+          - "com.github.nginx-proxy.nginx-proxy=true"
+        ports:
           - 80:80
+          - 443:443
+        volumes:
+          - ${PWD}/.nginx/certs:/etc/nginx/certs
+          - ${PWD}/.nginx/vhost:/etc/nginx/vhost.d
+          - ${PWD}/.nginx/html:/usr/share/nginx/html
+          - ${PWD}/.nginx/conf:/etc/nginx/conf.d
+          - /var/run/docker.sock:/tmp/docker.sock:ro
+        networks:
+          - lan
+
+    acme-companion:
+        image: nginxproxy/acme-companion:latest
+        container_name: acme-companion
+        hostname: acme-companion
+        restart: unless-stopped
+        depends_on:
+          - nginx-proxy
+        environment:
+          - DEFAULT_EMAIL=${LETSENCRYPT_EMAIL}
+          - NGINX_PROXY_CONTAINER=nginx-proxy
+        volumes:
+          - ${PWD}/.nginx/certs:/etc/nginx/certs
+          - ${PWD}/.nginx/vhost:/etc/nginx/vhost.d
+          - ${PWD}/.nginx/html:/usr/share/nginx/html
+          - ${PWD}/.nginx/acme:/etc/acme.sh
+          - /var/run/docker.sock:/var/run/docker.sock:ro
         networks:
           - lan
 
     bos:
         image: alexbosworth/balanceofsatoshis
         hostname: bos
+        container_name: bos
+        restart: unless-stopped
+        depends_on:
+          - lit
         volumes:
           - ${PWD}/.lnd:/home/node/.lnd
           - ${PWD}/.bos:/home/node/.bos
-        container_name: bos
-        entrypoint: ""
-        command: ["sleep", "infinity"]
+          - ${PWD}/bos-entrypoint.sh:/app/bos-entrypoint.sh:ro
+        # The wrapper decides whether to idle or run the Telegram bot,
+        # based on the files created by scripts/initbostelegram.
+        entrypoint: ["bash", "/app/bos-entrypoint.sh"]
         networks:
           - lan
+
+    tor:
+        build:
+          context: .
+          dockerfile: Dockerfile.tor
+        image: nimblenode/tor:latest
+        # Build locally instead of pulling: this image is not on any registry.
+        pull_policy: build
+        container_name: tor
+        restart: unless-stopped
+        # Only started when the "tor" profile is active. The installer sets
+        # COMPOSE_PROFILES=tor in .env for hybrid / tor-only modes.
+        profiles: ["tor"]
+        # Independent sidecar on the lan network: LND reaches it at
+        # tor:9050 (socks) / tor:9051 (control). Kept separate from lit so a
+        # lit restart never tears down Tor's networking.
+        networks:
+          - lan
+        # Hardening: Tor needs no extra privileges. Everything writable lives
+        # in the tor-data volume and tmpfs, so the rootfs stays read-only.
+        read_only: true
+        security_opt:
+          - no-new-privileges:true
+        cap_drop:
+          - ALL
+        tmpfs:
+          - /tmp
+        volumes:
+          - ${PWD}/.tor/torrc:/etc/tor/torrc:ro
+          - tor-data:/var/lib/tor
 
 networks:
   lan:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  # Holds Tor state and the control-auth cookie, shared read-only with lit.
+  tor-data:
