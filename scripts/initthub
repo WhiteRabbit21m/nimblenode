@@ -1,0 +1,193 @@
+#!/bin/bash
+
+###############################################################################
+# Nimble Node - ThunderHub Initialization Script
+#
+# This script sets up ThunderHub by:
+# 1. Reading the node alias and ThunderHub host from .env
+# 2. Asking for (or generating) a ThunderHub master password
+# 3. Generating thubConfig.yaml pointing at the local LND node
+# 4. Starting the thunderhub / nginx-proxy / acme-companion containers
+#
+# Prerequisites:
+# - LND wallet must be created (run ./scripts/create first)
+# - Docker containers must be running
+###############################################################################
+
+set -e  # Exit immediately if a command exits with a non-zero status
+
+# Load shared helpers (color output, ownership resolution)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
+###############################################################################
+# Step 1: Verify root privileges
+###############################################################################
+print_step "Checking root privileges..."
+
+if [ "$EUID" -ne 0 ]; then
+    print_error "This script must be run as root"
+    print_info "Please run: sudo $0"
+    exit 1
+fi
+
+print_success "Root privileges verified"
+echo ""
+
+###############################################################################
+# Step 2: Check required files
+###############################################################################
+print_step "Checking required files..."
+
+ENV_FILE="./.env"
+MACAROON_FILE=".lnd/data/chain/bitcoin/mainnet/admin.macaroon"
+TLS_CERT_FILE=".lnd/tls.cert"
+
+if [ ! -f "$ENV_FILE" ]; then
+    print_error "File not found: $ENV_FILE"
+    print_info "Please ensure you are in the nimblenode directory"
+    print_info "Current directory: $(pwd)"
+    exit 1
+fi
+
+if [ ! -f "$MACAROON_FILE" ]; then
+    print_error "Admin macaroon not found: $MACAROON_FILE"
+    print_info "Please run ./scripts/create first to create your wallet"
+    exit 1
+fi
+
+if [ ! -f "$TLS_CERT_FILE" ]; then
+    print_error "TLS certificate not found: $TLS_CERT_FILE"
+    print_info "Please ensure your node has started at least once"
+    exit 1
+fi
+
+print_success "Required files found"
+echo ""
+
+###############################################################################
+# Step 3: Read alias and ThunderHub host from .env
+###############################################################################
+print_step "Reading configuration from .env..."
+
+SETALIAS=$(grep '^SETALIAS=' "$ENV_FILE" | head -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
+THUB_HOST=$(grep '^THUB_HOST=' "$ENV_FILE" | head -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
+
+# Fall back to a default account name if the alias is not set
+if [ -z "$SETALIAS" ]; then
+    SETALIAS="NimbleNode"
+    print_warning "SETALIAS not set in .env, using default account name: $SETALIAS"
+fi
+
+print_success "Account name: $SETALIAS"
+if [ -n "$THUB_HOST" ]; then
+    print_success "ThunderHub host: $THUB_HOST"
+else
+    print_warning "THUB_HOST not set in .env (the reverse proxy needs it to serve ThunderHub)"
+fi
+echo ""
+
+###############################################################################
+# Step 4: Choose the ThunderHub master password
+###############################################################################
+print_step "Setting the ThunderHub master password..."
+echo ""
+echo "This password protects access to the ThunderHub web interface."
+echo "Leave it empty to generate a strong random password automatically."
+echo ""
+
+read -rsp "Enter master password (min 8 chars, empty to auto-generate): " THUB_PASS
+echo ""
+
+if [ -z "$THUB_PASS" ]; then
+    THUB_PASS=$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)
+    print_info "Generated random master password: $THUB_PASS"
+    print_warning "Write this password down now, it will not be shown again."
+else
+    if [ "${#THUB_PASS}" -lt 8 ]; then
+        print_error "Password too short (minimum 8 characters)"
+        exit 1
+    fi
+    read -rsp "Confirm master password: " THUB_PASS_CONFIRM
+    echo ""
+    if [ "$THUB_PASS" != "$THUB_PASS_CONFIRM" ]; then
+        print_error "Passwords do not match"
+        exit 1
+    fi
+fi
+echo ""
+
+###############################################################################
+# Step 5: Generate thubConfig.yaml
+###############################################################################
+print_step "Generating thubConfig.yaml..."
+
+OUTPUT_FILE="./thubConfig.yaml"
+
+# A stray "docker compose up" before this script may have created a directory
+# in place of the bind-mounted file. Remove it so we can write the real config.
+if [ -d "$OUTPUT_FILE" ]; then
+    print_warning "Found a directory named thubConfig.yaml (stray Docker mount), removing it"
+    rm -rf "$OUTPUT_FILE"
+fi
+
+# Embed the credentials inline (base64) instead of file paths. ThunderHub runs
+# as a non-root user and cannot traverse the root-owned .lnd directories, so
+# reading the macaroon/cert from the mounted volume fails. Encoding them here
+# (as root) into the config removes any dependency on file permissions.
+print_info "Encoding macaroon and certificate to base64..."
+THUB_MACAROON=$(base64 -w0 "$MACAROON_FILE")
+THUB_CERT=$(base64 -w0 "$TLS_CERT_FILE")
+
+# Escape single quotes for YAML single-quoted scalars (' -> '')
+THUB_PASS_YAML="${THUB_PASS//\'/\'\'}"
+
+cat > "$OUTPUT_FILE" <<EOF
+# ThunderHub configuration (generated by scripts/initthub).
+# Credentials are embedded as base64 so ThunderHub (which runs as a non-root
+# user) does not need to read the root-owned files under .lnd.
+masterPassword: '${THUB_PASS_YAML}'
+accounts:
+  - name: '${SETALIAS}'
+    serverUrl: 'lit:10009'
+    macaroon: '${THUB_MACAROON}'
+    certificate: '${THUB_CERT}'
+EOF
+
+chmod 600 "$OUTPUT_FILE"
+chown "$(target_owner)" "$OUTPUT_FILE" 2>/dev/null || print_warning "Could not change ownership of $OUTPUT_FILE"
+
+print_success "Configuration written to $OUTPUT_FILE"
+echo ""
+
+###############################################################################
+# Step 6: Start the ThunderHub and reverse proxy containers
+###############################################################################
+print_step "Starting ThunderHub and reverse proxy containers..."
+
+if docker compose up -d thunderhub nginx-proxy acme-companion; then
+    print_success "Containers started"
+else
+    print_error "Failed to start containers"
+    print_info "Check the output above and try: docker compose up -d"
+    exit 1
+fi
+echo ""
+
+###############################################################################
+# Completion message
+###############################################################################
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}          THUNDERHUB INITIALIZED SUCCESSFULLY!           ${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+print_info "Access ThunderHub at:"
+if [ -n "$THUB_HOST" ]; then
+    echo "     https://$THUB_HOST"
+else
+    echo "     (set THUB_HOST in .env to serve it via the reverse proxy)"
+fi
+echo ""
+print_warning "The first HTTPS access may take a minute while the certificate is issued."
+print_info "Follow certificate issuance with: docker logs -f acme-companion"
+echo ""

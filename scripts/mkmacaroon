@@ -1,0 +1,161 @@
+#!/bin/bash
+
+###############################################################################
+# Nimble Node - Custom Macaroon Generator
+#
+# Bakes a least-privilege LND macaroon for external apps (Zeus, LNbits, ...)
+# instead of handing out the all-powerful admin.macaroon.
+#
+# It offers ready-made profiles (read-only, invoice-only) or a custom set of
+# permissions, optionally restricted to a single IP address, and prints the
+# result in both hex and base64.
+#
+# Prerequisites:
+# - The 'lit' container running with an unlocked wallet
+###############################################################################
+
+set -e  # Exit immediately if a command exits with a non-zero status
+
+# Load shared helpers (color output, ownership resolution)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
+###############################################################################
+# Step 1: Verify root privileges
+###############################################################################
+print_step "Checking root privileges..."
+
+if [ "$EUID" -ne 0 ]; then
+    print_error "This script must be run as root"
+    print_info "Please run: sudo $0"
+    exit 1
+fi
+
+print_success "Root privileges verified"
+echo ""
+
+###############################################################################
+# Step 2: Check the lit container is running
+###############################################################################
+print_step "Checking the 'lit' container..."
+
+if ! docker ps --format '{{.Names}}' | grep -q '^lit$'; then
+    print_error "Container 'lit' is not running"
+    print_info "Start it with: docker compose up -d"
+    exit 1
+fi
+
+print_success "Container 'lit' is running"
+echo ""
+
+###############################################################################
+# Step 3: Choose a permission profile
+###############################################################################
+print_step "Choose the macaroon profile"
+echo ""
+echo "  1) read-only    - view info, balances, channels (cannot spend)"
+echo "  2) invoice-only - create/read invoices and receive addresses (cannot spend)"
+echo "  3) custom       - enter your own 'entity:action' permissions"
+echo ""
+read -rp "Selection [1-3]: " CHOICE
+echo ""
+
+PERMS=()
+NAME=""
+
+case "$CHOICE" in
+    1)
+        NAME="readonly"
+        PERMS=(info:read offchain:read onchain:read invoices:read peers:read address:read)
+        ;;
+    2)
+        NAME="invoice"
+        PERMS=(info:read invoices:read invoices:write address:read address:write)
+        ;;
+    3)
+        NAME="custom"
+        echo "Enter permissions separated by spaces (e.g. info:read invoices:write)"
+        echo "Common entities: info, invoices, onchain, offchain, address, peers, message, signer"
+        echo "Actions: read, write, generate"
+        echo ""
+        read -rp "Permissions: " -a PERMS
+        if [ "${#PERMS[@]}" -eq 0 ]; then
+            print_error "No permissions provided"
+            exit 1
+        fi
+        ;;
+    *)
+        print_error "Invalid selection"
+        exit 1
+        ;;
+esac
+
+print_success "Profile: $NAME"
+print_info "Permissions: ${PERMS[*]}"
+echo ""
+
+###############################################################################
+# Step 4: Optional IP restriction
+###############################################################################
+print_step "Optional IP restriction"
+echo "Restrict the macaroon so it only works from a single IP address."
+echo "Leave empty to allow any IP."
+echo ""
+read -rp "Allowed IP address (optional): " ALLOW_IP
+echo ""
+
+###############################################################################
+# Step 5: Bake the macaroon
+###############################################################################
+print_step "Baking the macaroon..."
+
+# The .lnd directory is shared with the host, so we can read the baked file back.
+CONTAINER_PATH="/root/.lnd/.mkmacaroon.tmp"
+HOST_PATH=".lnd/.mkmacaroon.tmp"
+
+ARGS=(bakemacaroon --save_to "$CONTAINER_PATH")
+if [ -n "$ALLOW_IP" ]; then
+    ARGS+=(--ip_address "$ALLOW_IP")
+fi
+ARGS+=("${PERMS[@]}")
+
+if ! docker exec lit /app/lncli "${ARGS[@]}" >/dev/null; then
+    print_error "bakemacaroon failed (is the wallet unlocked?)"
+    print_info "If the wallet is locked, run ./scripts/unlock first"
+    rm -f "$HOST_PATH"
+    exit 1
+fi
+
+if [ ! -f "$HOST_PATH" ]; then
+    print_error "Baked macaroon file not found at $HOST_PATH"
+    exit 1
+fi
+
+MACAROON_HEX=$(od -An -tx1 "$HOST_PATH" | tr -d ' \n')
+MACAROON_B64=$(base64 -w0 "$HOST_PATH")
+
+# The temporary file contains a usable credential: remove it once encoded.
+rm -f "$HOST_PATH"
+
+print_success "Macaroon baked"
+echo ""
+
+###############################################################################
+# Output
+###############################################################################
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}                 MACAROON ($NAME)${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "HEX:"
+echo "$MACAROON_HEX"
+echo ""
+echo "BASE64:"
+echo "$MACAROON_B64"
+echo ""
+if [ -n "$ALLOW_IP" ]; then
+    print_info "Restricted to IP: $ALLOW_IP"
+fi
+print_warning "Treat this macaroon as a secret. Anyone who has it gets these permissions."
+print_info "Use it with the REST endpoint: https://\${LND_HOST} (see your .env)"
+echo ""

@@ -1,0 +1,260 @@
+#!/bin/bash
+
+###############################################################################
+# Nimble Node - Guided Installer (orchestrator)
+#
+# Walks through the whole setup in order:
+# 1. Checks prerequisites (root, Docker, Docker Compose)
+# 2. Prepares the .env file
+# 3. Starts the core services (LiT, reverse proxy, BOS)
+# 4. Creates the LND wallet (interactive) if needed
+# 5. Optionally configures BOS, ThunderHub and the BOS Telegram bot
+#
+# Each optional step simply calls the dedicated script, so you can also run
+# them individually later.
+###############################################################################
+
+set -e  # Exit immediately if a command exits with a non-zero status
+
+# Load shared helpers (color output, ownership resolution)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
+# Always operate from the project root so relative paths (.env, .lnd, ...) work
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_DIR"
+
+# Ask a yes/no question; returns success on yes
+confirm() {
+    local reply
+    read -rp "$1 [y/N]: " reply
+    [[ "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+# Set (or update) a KEY=value pair in the .env file
+set_env_var() {
+    local key="$1" val="$2"
+    if grep -qE "^${key}=" .env; then
+        sed -i "s|^${key}=.*|${key}=${val}|" .env
+    else
+        echo "${key}=${val}" >> .env
+    fi
+}
+
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}                 NIMBLE NODE INSTALLER                  ${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+###############################################################################
+# Step 1: Prerequisites
+###############################################################################
+print_step "Checking prerequisites..."
+
+if [ "$EUID" -ne 0 ]; then
+    print_error "This script must be run as root"
+    print_info "Please run: sudo $0"
+    exit 1
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+    print_error "Docker is not installed"
+    exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+    print_error "The Docker daemon is not running"
+    print_info "Start it with: systemctl start docker"
+    exit 1
+fi
+
+if ! docker compose version >/dev/null 2>&1; then
+    print_error "The Docker Compose plugin is not available"
+    exit 1
+fi
+
+print_success "Prerequisites OK"
+echo ""
+
+###############################################################################
+# Step 2: .env file
+###############################################################################
+print_step "Preparing the .env file..."
+
+if [ ! -f .env ]; then
+    cp .env.example .env
+    chown "$(target_owner)" .env 2>/dev/null || true
+    chmod 600 .env 2>/dev/null || true
+    print_warning ".env created from the template."
+    echo ""
+    print_info "Edit .env and set your values:"
+    echo "  - CHOSENPASSWORD   (UI password, min 8 chars)"
+    echo "  - SETALIAS         (node alias)"
+    echo "  - SETHOST          (main FQDN, e.g. node.example.com)"
+    echo "  - THUB_HOST        (e.g. thunderhub.example.com)"
+    echo "  - LND_HOST         (e.g. lnd.example.com)"
+    echo "  - LETSENCRYPT_EMAIL"
+    echo ""
+    print_info "Also create the matching DNS A records, then run this script again."
+    exit 0
+fi
+
+if grep -qE '^(CHOSENPASSWORD=changeme|SETALIAS=yournodealias|SETHOST=yournodeFQDM)$' .env; then
+    print_error "Your .env still contains placeholder values."
+    print_info "Edit .env with your real values, then re-run: sudo $0"
+    exit 1
+fi
+
+# .env holds the UI password in plaintext, so keep it owner-readable only.
+chmod 600 .env 2>/dev/null || true
+
+print_success ".env looks configured"
+echo ""
+
+###############################################################################
+# Step 2b: Container user mapping
+###############################################################################
+# ThunderHub reads its account file (thubConfig.yaml, chmod 600) as a
+# non-root container user. Record the host owner's uid/gid in .env so
+# docker-compose can run that container as the same uid regardless of what
+# it actually is on this host (falls back to 1000 if unset).
+OWNER_USER="$(target_owner)"
+set_env_var DEV_UID "$(id -u "$OWNER_USER")"
+set_env_var DEV_GID "$(id -g "$OWNER_USER")"
+
+###############################################################################
+# Step 3: Network privacy mode (Tor)
+###############################################################################
+print_step "Network privacy mode..."
+
+# Only LND's p2p uses Tor; the web UIs stay on clearnet either way.
+echo "  1) Clearnet only  (public IP + domain, no Tor)"
+echo "  2) Hybrid         (clearnet + Tor onion) [recommended]"
+echo "  3) Tor only       (onion only, public IP not advertised)"
+read -rp "Choose [1-3, default 2]: " tor_choice
+
+case "$tor_choice" in
+    1) TOR_MODE=clearnet ;;
+    3) TOR_MODE=tor ;;
+    *) TOR_MODE=hybrid ;;
+esac
+
+set_env_var TOR_MODE "$TOR_MODE"
+# COMPOSE_PROFILES lets a plain "docker compose up -d" start (or skip) the tor
+# container automatically based on the chosen mode.
+if [ "$TOR_MODE" = "clearnet" ]; then
+    set_env_var COMPOSE_PROFILES ""
+else
+    set_env_var COMPOSE_PROFILES "tor"
+fi
+
+print_success "Network mode: $TOR_MODE"
+echo ""
+
+###############################################################################
+# Step 4: Start core services
+###############################################################################
+print_step "Starting core services (lit, reverse proxy)..."
+
+# lit and the reverse proxy are always needed; BOS is optional.
+CORE_SERVICES=(lit nginx-proxy acme-companion)
+
+# Bring up the Tor sidecar for hybrid / tor-only modes.
+if [ "$TOR_MODE" != "clearnet" ]; then
+    CORE_SERVICES+=(tor)
+fi
+
+if confirm "Also run the Balance of Satoshis (BOS) container?"; then
+    CORE_SERVICES+=(bos)
+fi
+
+if docker compose up -d "${CORE_SERVICES[@]}"; then
+    print_success "Core services started"
+else
+    print_error "Failed to start the core services"
+    print_info "Check the output above and try: docker compose up -d"
+    exit 1
+fi
+echo ""
+
+###############################################################################
+# Step 5: Wallet
+###############################################################################
+print_step "LND wallet..."
+
+MACAROON_FILE=".lnd/data/chain/bitcoin/mainnet/admin.macaroon"
+
+if [ -f "$MACAROON_FILE" ]; then
+    print_success "Wallet already exists"
+    print_info "If it is locked after a restart, unlock it with: sudo ./scripts/unlock"
+else
+    print_warning "No wallet found yet."
+    if confirm "Create the LND wallet now (interactive)?"; then
+        echo ""
+        "$SCRIPT_DIR/create"
+    else
+        print_info "Skipped. Create it later with: sudo ./scripts/create"
+    fi
+fi
+echo ""
+
+###############################################################################
+# Step 6: Optional components
+###############################################################################
+if [ -f "$MACAROON_FILE" ]; then
+    print_step "Optional components"
+    echo ""
+
+    if confirm "Configure Balance of Satoshis (BOS) now?"; then
+        echo ""
+        "$SCRIPT_DIR/initbos" || print_warning "initbos did not complete (you can run it later)"
+        echo ""
+    fi
+
+    if confirm "Set up ThunderHub now?"; then
+        echo ""
+        "$SCRIPT_DIR/initthub" || print_warning "initthub did not complete (you can run it later)"
+        echo ""
+    fi
+
+    if confirm "Connect BOS to a Telegram bot now?"; then
+        echo ""
+        "$SCRIPT_DIR/initbostelegram" || print_warning "initbostelegram did not complete (you can run it later)"
+        echo ""
+    fi
+
+    # Make sure BOS/ThunderHub embed the certificate the node actually ended up
+    # using. This guards against a TLS regeneration happening between startup
+    # and the moment the credentials were generated. It is idempotent and only
+    # restarts containers if something actually changed.
+    "$SCRIPT_DIR/refreshcreds" || print_warning "refreshcreds did not complete (you can run it later)"
+    echo ""
+else
+    print_info "Optional components (BOS, ThunderHub, Telegram) can be configured"
+    print_info "after the wallet exists. Re-run this script or use the scripts directly."
+    echo ""
+fi
+
+###############################################################################
+# Completion message
+###############################################################################
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}                 INSTALLATION DONE!                     ${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+# Load the configured values so the summary shows the real URLs
+set -a
+# shellcheck disable=SC1091
+. ./.env
+set +a
+
+print_info "Your services (once certificates are issued and the chain has synced):"
+echo "  - LiT web UI:   https://${SETHOST:-<SETHOST>}"
+echo "  - ThunderHub:   https://${THUB_HOST:-<THUB_HOST>}"
+echo "  - LND REST API: https://${LND_HOST:-<LND_HOST>}"
+echo ""
+print_info "Generate least-privilege macaroons for apps with: sudo ./scripts/mkmacaroon"
+print_info "Follow certificate issuance with: docker logs -f acme-companion"
+print_info "If BOS/ThunderHub stop connecting after a restart, run: sudo ./scripts/refreshcreds"
+echo ""

@@ -2,9 +2,9 @@
 
 ###############################################################################
 # Nimble Node - Balance of Satoshis (BOS) Initialization Script
-#
+# 
 # This script initializes Balance of Satoshis by:
-# 1. Extracting the node alias from .env
+# 1. Extracting the node alias from docker-compose.yml
 # 2. Creating the BOS configuration directory
 # 3. Generating credentials.json with TLS certificate and macaroon
 #
@@ -15,34 +15,9 @@
 
 set -e  # Exit immediately if a command exits with a non-zero status
 
-# Color codes for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-
-# Function to print colored messages
-print_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-print_step() {
-    echo -e "${CYAN}[STEP]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
+# Load shared helpers (color output, ownership resolution)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
 
 ###############################################################################
 # Step 1: Verify root privileges
@@ -114,18 +89,17 @@ echo ""
 ###############################################################################
 print_step "Extracting node alias from .env..."
 
-# Extract SETALIAS value from .env
-SETALIAS=$(grep "^SETALIAS=" "$ENV_FILE" | sed 's/^SETALIAS=//' | tr -d ' ' | tr -d '"' | tr -d "'")
+# Extract SETALIAS value from .env (format: SETALIAS=YourNodeName)
+SETALIAS=$(grep '^SETALIAS=' "$ENV_FILE" | head -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
 
-# Check if a value was found
+# The alias is only used here as a folder name for the BOS credentials, so it
+# is not mandatory: fall back to a sane default when it is empty or missing.
 if [ -z "$SETALIAS" ]; then
-    print_error "SETALIAS not found in $ENV_FILE"
-    print_info "Please ensure your .env contains a SETALIAS setting"
-    print_info "Example: SETALIAS=YourNodeName"
-    exit 1
+    SETALIAS="NimbleNode"
+    print_warning "SETALIAS not set in $ENV_FILE, using default account name: $SETALIAS"
+else
+    print_success "Node alias found: $SETALIAS"
 fi
-
-print_success "Node alias found: $SETALIAS"
 echo ""
 
 ###############################################################################
@@ -220,9 +194,10 @@ echo ""
 ###############################################################################
 print_step "Setting proper ownership for BOS directory..."
 
-print_info "Changing ownership to dev:dev for $BOS_DIR"
+OWNER="$(target_owner)"
+print_info "Changing ownership to $OWNER for $BOS_DIR"
 
-if chown -R dev:dev "$BOS_DIR"; then
+if chown -R "$OWNER" "$BOS_DIR"; then
     print_success "Ownership updated successfully"
 else
     print_warning "Failed to update ownership (continuing anyway)"

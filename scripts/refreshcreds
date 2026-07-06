@@ -1,0 +1,175 @@
+#!/bin/bash
+
+###############################################################################
+# Nimble Node - Refresh embedded credentials
+#
+# BOS (.bos/<node>/credentials.json) and ThunderHub (thubConfig.yaml) embed a
+# base64 copy of LND's tls.cert. If LND ever regenerates that certificate (for
+# example after an IP/SAN change or TLS auto-refresh), the embedded copy goes
+# stale and the apps can no longer connect ("14 UNAVAILABLE ... self-signed
+# certificate" for BOS, "no macaroon configured" / connection errors for
+# ThunderHub).
+#
+# This script re-embeds the CURRENT tls.cert (and admin macaroon) into whatever
+# is already configured and restarts only the affected containers. It:
+#   - never changes any password (BOS or ThunderHub),
+#   - only touches components that are already set up,
+#   - is idempotent: it skips work (and the restart) when nothing changed.
+#
+# Run it whenever BOS or ThunderHub stop connecting after a node restart:
+#   sudo ./scripts/refreshcreds
+###############################################################################
+
+set -e
+
+# Load shared helpers (color output, ownership resolution)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
+# Always operate from the project root so relative paths (.lnd, .bos, ...) work
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_DIR"
+
+###############################################################################
+# Step 1: Verify root privileges
+###############################################################################
+print_step "Checking root privileges..."
+
+if [ "$EUID" -ne 0 ]; then
+    print_error "This script must be run as root"
+    print_info "Please run: sudo $0"
+    exit 1
+fi
+
+print_success "Root privileges verified"
+echo ""
+
+###############################################################################
+# Step 2: Read the current certificate and macaroon
+###############################################################################
+print_step "Reading current LND certificate and macaroon..."
+
+MACAROON_FILE=".lnd/data/chain/bitcoin/mainnet/admin.macaroon"
+TLS_CERT_FILE=".lnd/tls.cert"
+
+if [ ! -f "$TLS_CERT_FILE" ]; then
+    print_error "TLS certificate not found: $TLS_CERT_FILE"
+    print_info "Make sure the node has started at least once."
+    exit 1
+fi
+
+if [ ! -f "$MACAROON_FILE" ]; then
+    print_error "Admin macaroon not found: $MACAROON_FILE"
+    print_info "Create the wallet first with: sudo ./scripts/create"
+    exit 1
+fi
+
+CERT_B64=$(base64 -w0 "$TLS_CERT_FILE")
+MAC_B64=$(base64 -w0 "$MACAROON_FILE")
+
+if [ -z "$CERT_B64" ] || [ -z "$MAC_B64" ]; then
+    print_error "Failed to encode the certificate or macaroon"
+    exit 1
+fi
+
+print_success "Current certificate and macaroon loaded"
+echo ""
+
+# Restart a container only if it exists; report clearly otherwise.
+restart_if_running() {
+    local name="$1"
+    if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
+        if docker restart "$name" >/dev/null 2>&1; then
+            print_success "Restarted container: $name"
+        else
+            print_warning "Could not restart container: $name (restart it manually)"
+        fi
+    else
+        print_info "Container '$name' is not created yet; nothing to restart"
+    fi
+}
+
+CHANGED=0
+
+###############################################################################
+# Step 3: Refresh BOS credentials
+###############################################################################
+print_step "Checking BOS credentials..."
+
+BOS_UPDATED=0
+if [ -d ./.bos ]; then
+    for cred in ./.bos/*/credentials.json; do
+        [ -f "$cred" ] || continue
+        if grep -qF "\"cert\":\"$CERT_B64\"" "$cred"; then
+            print_info "Up to date: $cred"
+            continue
+        fi
+
+        print_info "Updating: $cred"
+        # Preserve the existing socket if present, otherwise use the default.
+        socket=$(grep -o '"socket"[[:space:]]*:[[:space:]]*"[^"]*"' "$cred" | head -n1 | sed 's/.*"socket"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        [ -z "$socket" ] && socket="lit:10009"
+
+        cat > "$cred" <<EOF
+{
+        "cert":"$CERT_B64",
+        "macaroon":"$MAC_B64",
+        "socket":"$socket"
+}
+EOF
+        chown "$(target_owner)" "$cred" 2>/dev/null || true
+        BOS_UPDATED=1
+        CHANGED=1
+    done
+
+    if [ "$BOS_UPDATED" -eq 1 ]; then
+        restart_if_running bos
+    fi
+else
+    print_info "BOS is not configured (no .bos directory); skipping"
+fi
+echo ""
+
+###############################################################################
+# Step 4: Refresh ThunderHub credentials
+###############################################################################
+print_step "Checking ThunderHub configuration..."
+
+THUB_CONFIG="./thubConfig.yaml"
+
+if [ -f "$THUB_CONFIG" ]; then
+    if ! grep -qE "^[[:space:]]*certificate:" "$THUB_CONFIG"; then
+        print_info "ThunderHub uses a certificate path (not inline); nothing to re-embed"
+    elif grep -qF "certificate: '$CERT_B64'" "$THUB_CONFIG"; then
+        print_info "Up to date: $THUB_CONFIG"
+    else
+        print_info "Updating inline credentials in $THUB_CONFIG (password preserved)"
+        # base64 never contains '|', so it is a safe sed delimiter here. Only the
+        # inline macaroon/certificate lines are touched; masterPassword, account
+        # name and everything else stay exactly as they are.
+        sed -i "s|^\([[:space:]]*macaroon:\).*|\1 '$MAC_B64'|" "$THUB_CONFIG"
+        sed -i "s|^\([[:space:]]*certificate:\).*|\1 '$CERT_B64'|" "$THUB_CONFIG"
+        chown "$(target_owner)" "$THUB_CONFIG" 2>/dev/null || true
+        CHANGED=1
+        restart_if_running thunderhub
+    fi
+else
+    print_info "ThunderHub is not configured (no thubConfig.yaml); skipping"
+fi
+echo ""
+
+###############################################################################
+# Completion message
+###############################################################################
+if [ "$CHANGED" -eq 1 ]; then
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}            CREDENTIALS REFRESHED SUCCESSFULLY!          ${NC}"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    print_info "Give the restarted containers a few seconds to reconnect, then check:"
+    echo "  docker logs --tail 20 bos"
+    echo "  docker logs --tail 20 thunderhub"
+else
+    print_success "Everything already matches the current certificate. Nothing to do."
+fi
+echo ""

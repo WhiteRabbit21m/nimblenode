@@ -1,0 +1,10 @@
+# ThunderHub configuration template.
+# Copy to thubConfig.yaml and set a strong masterPassword before starting.
+# Paths are relative to the ThunderHub container, where .lnd is mounted
+# read-only at /root/.lnd.
+masterPassword: 'CHANGE_ME_strong_password'
+accounts:
+  - name: 'NimbleNode'
+    serverUrl: 'lit:10009'
+    macaroonPath: '/root/.lnd/data/chain/bitcoin/mainnet/admin.macaroon'
+    certificatePath: '/root/.lnd/tls.cert'
