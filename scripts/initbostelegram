@@ -56,24 +56,35 @@ print_success "Prerequisites OK"
 echo ""
 
 ###############################################################################
-# Step 3: Ask for the Telegram bot token
+# Step 3: Read the Telegram bot token from .env
 ###############################################################################
 print_step "Telegram bot token"
-echo ""
-echo "On Telegram, talk to @BotFather, run /newbot and copy the HTTP API token."
-echo ""
 
-read -rsp "Paste the BotFather API token: " TG_TOKEN
-echo ""
+ENV_FILE="./.env"
 
-if [ -z "$TG_TOKEN" ]; then
-    print_error "No token provided"
+if [ ! -f "$ENV_FILE" ]; then
+    print_error "$ENV_FILE not found"
     exit 1
 fi
 
+TG_TOKEN="$(grep -E '^TELEGRAM_BOT_TOKEN=' "$ENV_FILE" | cut -d'=' -f2-)"
+
+if [ -z "$TG_TOKEN" ]; then
+    print_error "TELEGRAM_BOT_TOKEN not set in $ENV_FILE"
+    print_info "On Telegram, talk to @BotFather, run /newbot, copy the HTTP API token,"
+    print_info "then add it to .env as: TELEGRAM_BOT_TOKEN=<token>"
+    exit 1
+fi
+
+print_success "Token found in .env"
+
 KEY_FILE="$BOS_DIR/telegram_bot_api_key"
 printf '%s' "$TG_TOKEN" > "$KEY_FILE"
-chmod 600 "$KEY_FILE"
+# 644 (non 600): il container bos gira come uid 1000 di default (nessun
+# override "user:" in docker-compose.yml), quindi il file deve restare
+# leggibile da un uid diverso da quello del proprietario su host — stesso
+# schema già usato per .bos/<alias>/credentials.json.
+chmod 644 "$KEY_FILE"
 chown "$(target_owner)" "$KEY_FILE" 2>/dev/null || print_warning "Could not change ownership of $KEY_FILE"
 
 print_success "Token saved to $KEY_FILE"
@@ -114,7 +125,7 @@ fi
 
 CODE_FILE="$BOS_DIR/telegram_connect_code"
 printf '%s' "$TG_CODE" > "$CODE_FILE"
-chmod 600 "$CODE_FILE"
+chmod 644 "$CODE_FILE"
 chown "$(target_owner)" "$CODE_FILE" 2>/dev/null || print_warning "Could not change ownership of $CODE_FILE"
 
 print_success "Connection code saved"
