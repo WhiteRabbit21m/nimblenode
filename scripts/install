@@ -112,6 +112,17 @@ print_success ".env looks configured"
 echo ""
 
 ###############################################################################
+# Step 2b: Container user mapping
+###############################################################################
+# ThunderHub reads its account file (thubConfig.yaml, chmod 600) as a
+# non-root container user. Record the host owner's uid/gid in .env so
+# docker-compose can run that container as the same uid regardless of what
+# it actually is on this host (falls back to 1000 if unset).
+OWNER_USER="$(target_owner)"
+set_env_var DEV_UID "$(id -u "$OWNER_USER")"
+set_env_var DEV_GID "$(id -g "$OWNER_USER")"
+
+###############################################################################
 # Step 3: Network privacy mode (Tor)
 ###############################################################################
 print_step "Network privacy mode..."
@@ -148,13 +159,9 @@ print_step "Starting core services (lit, reverse proxy)..."
 # lit and the reverse proxy are always needed; BOS is optional.
 CORE_SERVICES=(lit nginx-proxy acme-companion)
 
-# Bring up the Tor sidecar for hybrid / tor-only modes. Build it first, since
-# the image is local-only (not on any registry) and up would otherwise try to
-# pull it.
+# Bring up the Tor sidecar for hybrid / tor-only modes.
 if [ "$TOR_MODE" != "clearnet" ]; then
     CORE_SERVICES+=(tor)
-    print_info "Building the Tor image (first run only)..."
-    docker compose build tor || print_warning "Tor image build failed (will retry on up)"
 fi
 
 if confirm "Also run the Balance of Satoshis (BOS) container?"; then

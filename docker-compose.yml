@@ -49,6 +49,7 @@ services:
         restart: unless-stopped
         depends_on:
           - lit
+        user: "${DEV_UID:-1000}:${DEV_GID:-1000}"
         environment:
           - NO_VERSION_CHECK=true
           - ACCOUNT_CONFIG_PATH=/config/thubConfig.yaml
@@ -118,12 +119,7 @@ services:
           - lan
 
     tor:
-        build:
-          context: .
-          dockerfile: Dockerfile.tor
-        image: nimblenode/tor:latest
-        # Build locally instead of pulling: this image is not on any registry.
-        pull_policy: build
+        image: massmux/nimblenode-tor:latest
         container_name: tor
         restart: unless-stopped
         # Only started when the "tor" profile is active. The installer sets
